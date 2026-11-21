@@ -159,12 +159,7 @@ def from_web(years=10, max_pages=50):
     rows=sorted(rows_by_date.values(),key=lambda r:r['date'])
     if not rows: raise RuntimeError('ไม่พบข้อมูลงวด')
     # Keep draws in the requested rolling year range, based on latest draw date.
-    target_year = rows[-1]['date'].year - years
-    last_dt = rows[-1]['date']
-    try:
-        cutoff = last_dt.replace(year=target_year)
-    except ValueError:
-        cutoff = last_dt.replace(year=target_year, month=2, day=28)
+    cutoff=rows[-1]['date'].replace(year=rows[-1]['date'].year-years)
     rows=[r for r in rows if r['date']>=cutoff]
     return rows, successful_base
 
@@ -385,8 +380,7 @@ def rank_hybrid_sets(historical_rows, all_rows, field, limit=10, window=20,
     return normalize_scores(scored)[:limit]
 
 
-def run_engine_comparison(rows, selected_rows, window=20, top_n=10, test_count=30,
-                          weekday_mode='match'):
+def run_engine_comparison(rows, selected_rows, window=20, top_n=10, test_count=30):
     """Walk-forward comparison. Each test draw is predicted only from earlier rows."""
     all_rows=dedupe(rows)
     selected=dedupe(selected_rows)
@@ -400,10 +394,7 @@ def run_engine_comparison(rows, selected_rows, window=20, top_n=10, test_count=3
             continue
         train_all=all_rows[:idx]
         target=all_rows[idx]
-        if weekday_mode == 'all':
-            train_selected=[r for r in train_all if r['date'].weekday() < 5]
-        else:
-            train_selected=[r for r in train_all if r['date'].weekday()==target['date'].weekday()]
+        train_selected=[r for r in train_all if r['date'].weekday()==target['date'].weekday()]
         if len(train_selected)<5:
             continue
         for field in ('top2','bottom2','top3'):
