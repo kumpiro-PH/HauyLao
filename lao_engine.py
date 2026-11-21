@@ -56,39 +56,42 @@ def parse_date(value):
     d,mo,y=map(int,m.groups())
     return datetime(y-543 if y>2400 else y,mo,d)
 
-def make_row(date_text, six, bottom2=None):
-    """Build a draw row; bottom2 must come from the published prize when available.
-
-    The fallback keeps compatibility with legacy CSV files that do not contain a
-    bottom2 column, but it is only a placeholder derived from the first prize.
-    """
-    six=str(six).strip()
-    if not re.fullmatch(r'\d{6}',six): return None
-    dt=parse_date(date_text)
-    actual_bottom2 = re.sub(r'\D', '', str(bottom2 or ''))
-    if actual_bottom2 and len(actual_bottom2) != 2:
+def _clean_digits(value, length):
+    """Keep a lottery number as a zero-padded digit string."""
+    digits = re.sub(r"\D", "", str(value or ""))
+    if not digits:
         return None
-    if not actual_bottom2:
-        actual_bottom2 = six[-4:-2]  # legacy fallback only; not the actual lower prize
-    return {'date':dt,'six':six,'top3':six[-3:],'top2':six[-2:],'bottom2':actual_bottom2}
+    if len(digits) > length:
+        digits = digits[-length:]
+    return digits.zfill(length)
+
+
+def make_row(date_text, six, bottom2=None, top3=None, top2=None):
+    """Build one draw. bottom2 is an independent prize, never derived from six."""
+    six = _clean_digits(six, 6)
+    if six is None or len(six) != 6:
+        return None
+    dt = parse_date(date_text)
+    return {
+        "date": dt,
+        "six": six,
+        "top3": _clean_digits(top3, 3) if top3 not in (None, "") else six[-3:],
+        "top2": _clean_digits(top2, 2) if top2 not in (None, "") else six[-2:],
+        # Legacy CSVs without bottom2 retain the old fallback; new data must supply it.
+        "bottom2": _clean_digits(bottom2, 2) if bottom2 not in (None, "") else six[-4:-2],
+    }
+
 
 def extract_rows(html):
-    parser=PageParser(); parser.feed(html); found=[]
+    parser = PageParser()
+    parser.feed(html)
+    found = []
     for table in parser.tables:
         for row in table:
-            if len(row)<5: continue
-            if not re.search(r'\d{1,2}/\d{1,2}/\d{4}',row[0]): continue
-            # ThaiORC columns: date | first prize | top3 | top2 | actual bottom2.
-            supplied_top3 = re.sub(r'\D', '', row[2])
-            supplied_top2 = re.sub(r'\D', '', row[3])
-            actual_bottom2 = re.sub(r'\D', '', row[4])
-            if supplied_top3 and supplied_top3.zfill(3) != str(row[1]).strip()[-3:]:
+            if len(row) < 5 or not re.search(r'\d{1,2}/\d{1,2}/\d{4}', row[0]):
                 continue
-            if supplied_top2 and supplied_top2.zfill(2) != str(row[1]).strip()[-2:]:
-                continue
-            if len(actual_bottom2) != 2:
-                continue
-            r=make_row(row[0],row[1],actual_bottom2)
+            # ThaiORC table columns: date, first prize, top3, top2, bottom2.
+            r = make_row(row[0], row[1], bottom2=row[4], top3=row[2], top2=row[3])
             if r:
                 found.append(r)
     return found, parser.links
@@ -145,10 +148,6 @@ def from_web(years=10, max_pages=50):
                 if r['date'] not in rows_by_date: rows_by_date[r['date']]=r; new+=1
                 elif rows_by_date[r['date']]['six'] != r['six']:
                     raise ValueError('ผลรางวัลวันที่ซ้ำแต่เลขไม่ตรงกัน: '+r['date'].strftime('%d/%m/%Y'))
-                else:
-                    # Prefer the latest fetched record so corrected actual bottom2
-                    # values replace legacy values previously derived from six digits.
-                    rows_by_date[r['date']] = r
             empty_streak=empty_streak+1 if new==0 else 0
             if empty_streak>=2: break
             time.sleep(0.15)
@@ -165,25 +164,34 @@ def from_web(years=10, max_pages=50):
     return rows, successful_base
 
 def from_csv(path):
-    rows=[]
-    with open(path,encoding='utf-8-sig',newline='') as f:
+    rows = []
+    with open(path, encoding="utf-8-sig", newline="") as f:
         for item in csv.DictReader(f):
-            date=item.get('date_be') or item.get('date')
-            six=item.get('first_prize') or item.get('six_digits') or item.get('six')
-            if not date or not six: raise ValueError('CSV ต้องมีคอลัมน์ date_be และ first_prize (เลข 6 หลัก)')
-            bottom2=item.get('bottom2') or item.get('last2') or item.get('last_2_digits')
-            r=make_row(date,six,bottom2)
-            if not r: raise ValueError('ข้อมูลรางวัลไม่ถูกต้อง (รางวัลที่ 1 ต้องมี 6 หลัก และเลข 2 ตัวล่างต้องมี 2 หลัก): '+str(six))
+            date = item.get("date_be") or item.get("date")
+            six = item.get("first_prize") or item.get("six_digits") or item.get("six")
+            if not date or not six:
+                raise ValueError("CSV ต้องมีคอลัมน์ date_be และ first_prize (เลข 6 หลัก)")
+            r = make_row(
+                date, six,
+                bottom2=item.get("bottom2") or item.get("last2") or item.get("2 ตัวล่าง"),
+                top3=item.get("top3"),
+                top2=item.get("top2"),
+            )
+            if not r:
+                raise ValueError("เลขรางวัลต้องเป็นตัวเลข 6 หลัก: " + str(six))
             rows.append(r)
     return dedupe(rows)
 
+
 def dedupe(rows):
-    data={}
+    data = {}
     for r in rows:
-        if r['date'] in data and data[r['date']]['six']!=r['six']:
-            raise ValueError('พบผลรางวัลวันที่ซ้ำแต่ไม่ตรงกัน')
-        data[r['date']]=r
-    return sorted(data.values(),key=lambda r:r['date'])
+        date = r["date"]
+        if date in data and data[date]["six"] != r["six"]:
+            raise ValueError("พบผลรางวัลวันที่ซ้ำแต่ไม่ตรงกัน")
+        # Later row wins for separately published prize fields (e.g. fresh web data).
+        data[date] = r
+    return sorted(data.values(), key=lambda r: r["date"])
 
 def kind(s):
     c=Counter(s)
