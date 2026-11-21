@@ -92,7 +92,12 @@ def load_uploaded(uploaded):
         six = item.get("first_prize") or item.get("six_digits") or item.get("six")
         if not date or not six:
             raise ValueError("CSV ต้องมีคอลัมน์ date_be และ first_prize (เลข 6 หลัก)")
-        row = make_row(date, six)
+        row = make_row(
+            date, six,
+            bottom2=item.get("bottom2") or item.get("last2"),
+            top3=item.get("top3"),
+            top2=item.get("top2"),
+        )
         if row is None:
             raise ValueError(f"เลขรางวัลต้องเป็นตัวเลข 6 หลัก: {six}")
         normalized.append(row)
@@ -123,9 +128,12 @@ with st.sidebar:
                 fresh_rows = dedupe(fresh_rows)
                 if not filter_weekday(fresh_rows, "all"):
                     raise ValueError("ไม่พบข้อมูลงวดวันจันทร์–ศุกร์")
-                st.session_state.rows_all = fresh_rows
+                merged_rows = dedupe(list(st.session_state.rows_all) + list(fresh_rows))
+                if len(merged_rows) < len(st.session_state.rows_all):
+                    raise ValueError("ข้อมูลจาก ThaiORC มีจำนวนงวดน้อยกว่าฐานเดิม จึงยกเลิกการแทนที่")
+                st.session_state.rows_all = merged_rows
                 st.session_state.source = f"ThaiORC: {source}"
-                st.success(f"อัปเดตสำเร็จ {len(fresh_rows):,} งวด")
+                st.success(f"อัปเดตสำเร็จ รวม {len(merged_rows):,} งวด (ข้อมูลเว็บ {len(fresh_rows):,} งวด)")
                 st.rerun()
         except Exception as exc:
             st.error(f"อัปเดตไม่สำเร็จ: {type(exc).__name__}: {exc}")
