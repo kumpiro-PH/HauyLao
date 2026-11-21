@@ -69,13 +69,28 @@ def format_rank(rows):
     } for i, x in enumerate(rows, 1)])
 
 def get_rows():
-    if "rows_all" not in st.session_state:
+    # Detect a changed Repository CSV and reload it instead of silently keeping
+    # an older dataset in Streamlit session_state.
+    signature = None
+    if DEFAULT_CSV.exists():
+        stat = DEFAULT_CSV.stat()
+        signature = (stat.st_mtime_ns, stat.st_size)
+
+    is_repository_source = st.session_state.get("data_mode", "repository") == "repository"
+    old_signature = st.session_state.get("repo_csv_signature")
+
+    if "rows_all" not in st.session_state or (
+        is_repository_source and signature is not None and signature != old_signature
+    ):
         if DEFAULT_CSV.exists():
-            st.session_state.rows_all = from_csv(str(DEFAULT_CSV))
+            st.session_state.rows_all = dedupe(from_csv(str(DEFAULT_CSV)))
             st.session_state.source = "ไฟล์ history_lao_10y.csv ใน Repository"
+            st.session_state.repo_csv_signature = signature
+            st.session_state.data_mode = "repository"
         else:
             st.session_state.rows_all = []
             st.session_state.source = "ยังไม่ได้โหลดข้อมูล"
+            st.session_state.data_mode = "repository"
     return st.session_state.rows_all
 
 def load_uploaded(uploaded):
@@ -114,7 +129,10 @@ with st.sidebar:
     st.caption(f"แหล่งข้อมูล: {st.session_state.get('source', 'ยังไม่ได้โหลดข้อมูล')}")
     if st.button("RELOAD REPOSITORY CSV", use_container_width=True):
         if DEFAULT_CSV.exists():
-            st.session_state.rows_all = from_csv(str(DEFAULT_CSV))
+            st.session_state.rows_all = dedupe(from_csv(str(DEFAULT_CSV)))
+            stat = DEFAULT_CSV.stat()
+            st.session_state.repo_csv_signature = (stat.st_mtime_ns, stat.st_size)
+            st.session_state.data_mode = "repository"
             st.session_state.source = "ไฟล์ history_lao_10y.csv ใน Repository (Reload)"
             st.success(f"โหลดฐานข้อมูลจาก Repository ใหม่แล้ว {len(st.session_state.rows_all):,} งวด")
             st.rerun()
@@ -123,7 +141,8 @@ with st.sidebar:
     uploaded = st.file_uploader("นำเข้าไฟล์ CSV", type=["csv"])
     if uploaded is not None and st.button("ใช้ไฟล์ CSV ที่เลือก", use_container_width=True):
         try:
-            st.session_state.rows_all = load_uploaded(uploaded)
+            st.session_state.rows_all = dedupe(load_uploaded(uploaded))
+            st.session_state.data_mode = "upload"
             st.session_state.source = f"CSV Upload: {uploaded.name}"
             st.success(f"โหลดข้อมูล {len(st.session_state.rows_all):,} งวดแล้ว")
             st.rerun()
@@ -189,10 +208,16 @@ with tabs[1]:
         c.metric("จำนวนงวด", len(rows_selected))
         st.write("**ตรวจสอบความถี่รวม (ใช้ยืนยันกับ Terminal)**")
         freq_check = pd.DataFrame([
-            {"เลข": d, "จำนวนครั้ง": overall[d]} for d in "0123456789"
+            {"อันดับ": i, "เลข": d, "จำนวนครั้ง": overall[d]}
+            for i, (d, _) in enumerate(ranked, 1)
         ])
         st.dataframe(freq_check, use_container_width=True, hide_index=True)
         st.caption(
+            f"เลขเด่น: {' - '.join(d for d, _ in ranked[:3])} | "
+            f"เลขรอง: {' - '.join(d for d, _ in ranked[3:6])}"
+        )
+        st.caption(
+            f"ฐานข้อมูลที่ใช้: {st.session_state.get('source', '')} | "
             f"ข้อมูลที่ใช้: {len(rows_selected)} งวด | "
             f"{rows_selected[0]['date']:%d/%m/%Y} ถึง {rows_selected[-1]['date']:%d/%m/%Y} | "
             f"รวมจำนวนหลักที่นับ: {sum(overall.values())}"
